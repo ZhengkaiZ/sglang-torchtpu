@@ -195,8 +195,9 @@ class TpuSpecWorker(BaseSpecWorker):
     and result packing are shared.
     """
 
-    # Tests build workers without __init__; serving sets this per runner.
-    _lean_target_forward = False
+    # None = decide at the first verify (the runner's envelope features finish
+    # installing after the worker is built); tests build workers without __init__.
+    _lean_target_forward: bool | None = False
 
     supports_logprobs = False
     # Opt in only when verification applies the scheduler's additive snapshot
@@ -241,9 +242,7 @@ class TpuSpecWorker(BaseSpecWorker):
         self._dp_attention = is_dp_attention_enabled()
         # DP attention relabels idle ranks' verify batches; those keep the full path.
         self._lean_target_forward = (
-            parallel.pp_size == 1
-            and not self._dp_attention
-            and lean_forward_allowed(runner)
+            None if parallel.pp_size == 1 and not self._dp_attention else False
         )
         if self._dp_attention and (
             envs.SGLANG_ENABLE_DP_SPEC_PREFILL_COORDINATION.get()
@@ -1704,8 +1703,11 @@ class TpuSpecWorker(BaseSpecWorker):
         # Keep logits/hidden on the batch bucket so the compiled accept op needs no re-pad.
         assert verify_forward_batch.spec_info is not None
         verify_forward_batch.spec_info.keep_outputs_padded = True
+        runner = self.target_worker.model_runner
+        if self._lean_target_forward is None:
+            self._lean_target_forward = lean_forward_allowed(runner)
         if self._lean_target_forward:
-            return lean_forward(self.target_worker.model_runner, verify_forward_batch)
+            return lean_forward(runner, verify_forward_batch)
         target_out = self.target_worker.forward_batch_generation(
             batch=None,
             forward_batch=verify_forward_batch,

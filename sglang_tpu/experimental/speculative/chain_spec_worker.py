@@ -90,8 +90,8 @@ _DRAFT_WORKER_CLS: dict[SpeculativeAlgorithm, type[TpuChainDraftWorker]] = {
 
 class TpuChainSpecWorker(TpuSpecWorker):
 
-    # Tests build workers without __init__; serving sets this per runner.
-    _lean_draft_forward = False
+    # None = decide at the first commit (see TpuSpecWorker._lean_target_forward).
+    _lean_draft_forward: bool | None = False
 
     def __init__(
         self,
@@ -122,7 +122,7 @@ class TpuChainSpecWorker(TpuSpecWorker):
             )
         self._chain_draft_worker = draft_worker
         self._draft_runner = draft_worker.model_runner
-        self._lean_draft_forward = lean_forward_allowed(self._draft_runner)
+        self._lean_draft_forward = None
         self._target_vocab_size = target_runner.model_config.vocab_size
         self._target_is_multimodal = process_model_config().is_multimodal
         self._disagg_mode = get_disagg().disaggregation_mode
@@ -262,6 +262,8 @@ class TpuChainSpecWorker(TpuSpecWorker):
         width = self.num_verify_rows
         drafter = self._chain_draft_worker
         shares_dsa_topk = drafter.dsa_seed_topk_width is not None
+        if self._lean_draft_forward is None:
+            self._lean_draft_forward = lean_forward_allowed(self._draft_runner)
         # Rows past the bonus carry token 0; their draft KV is past the new seq_lens.
         inputs = build_chain_block_inputs(
             accept.window_tokens, rows, state.seq_lens, accept.live_mask, 0
