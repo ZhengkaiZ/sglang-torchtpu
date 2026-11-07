@@ -195,6 +195,9 @@ class TpuSpecWorker(BaseSpecWorker):
     and result packing are shared.
     """
 
+    # Tests build workers without __init__; serving sets this per runner.
+    _lean_target_forward = False
+
     supports_logprobs = False
     # Opt in only when verification applies the scheduler's additive snapshot
     # at the padded batch size. Live penalizer state is still unsupported.

@@ -89,6 +89,10 @@ _DRAFT_WORKER_CLS: dict[SpeculativeAlgorithm, type[TpuChainDraftWorker]] = {
 
 
 class TpuChainSpecWorker(TpuSpecWorker):
+
+    # Tests build workers without __init__; serving sets this per runner.
+    _lean_draft_forward = False
+
     def __init__(
         self,
         server_args: ServerArgs,
