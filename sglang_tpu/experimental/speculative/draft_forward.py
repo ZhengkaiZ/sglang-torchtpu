@@ -16,6 +16,7 @@ from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.speculative.dflash_info import DFlashVerifyInput
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang_tpu.compilation.decoder_compile_policy import DecoderTpuCompilePolicy
+from sglang_tpu.experimental.speculative.lean_forward import lean_forward
 from sglang_tpu.experimental.speculative.spec_types import (
     DraftBlockInputs,
     TpuSpecVerifyInput,
@@ -54,6 +55,7 @@ def forward_draft_rows(
     spec_info: DFlashVerifyInput,
     capture_hidden_mode: CaptureHiddenMode,
     publish_dsa_topk: bool = False,
+    lean: bool = False,
 ) -> LogitsProcessorOutput:
     """Draft forward of width rows per request, offset rows past seq_lens, at the batch bucket.
 
@@ -113,4 +115,6 @@ def forward_draft_rows(
     )
     # Dynamo guards grad mode; the TPU warmup traced under no_grad.
     with torch.no_grad():
+        if lean:
+            return lean_forward(draft_runner, forward_batch)
         return draft_runner.forward(forward_batch).logits_output

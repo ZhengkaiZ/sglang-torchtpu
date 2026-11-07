@@ -96,6 +96,10 @@ from sglang_tpu.experimental.sampling.sampling_batch_info import (
     HostPaddedSamplingInfo,
     is_host_padded,
 )
+from sglang_tpu.experimental.speculative.lean_forward import (
+    lean_forward,
+    lean_forward_allowed,
+)
 from sglang_tpu.experimental.speculative.draft_forward import set_bucket_dp_metadata
 from sglang_tpu.experimental.speculative.draft_info import HostPaddedDraftInput
 from sglang_tpu.experimental.speculative.draft_worker import TpuDraftWorker
@@ -232,6 +236,12 @@ class TpuSpecWorker(BaseSpecWorker):
         self._block_verification = tpu_envs.SGLANG_TPU_SPEC_BLOCK_VERIFICATION.get()
         self._verify_ct = 0
         self._dp_attention = is_dp_attention_enabled()
+        # DP attention relabels idle ranks' verify batches; those keep the full path.
+        self._lean_target_forward = (
+            parallel.pp_size == 1
+            and not self._dp_attention
+            and lean_forward_allowed(runner)
+        )
         if self._dp_attention and (
             envs.SGLANG_ENABLE_DP_SPEC_PREFILL_COORDINATION.get()
             or get_spec().speculative_skip_dp_mlp_sync
@@ -1691,6 +1701,8 @@ class TpuSpecWorker(BaseSpecWorker):
         # Keep logits/hidden on the batch bucket so the compiled accept op needs no re-pad.
         assert verify_forward_batch.spec_info is not None
         verify_forward_batch.spec_info.keep_outputs_padded = True
+        if self._lean_target_forward:
+            return lean_forward(self.target_worker.model_runner, verify_forward_batch)
         target_out = self.target_worker.forward_batch_generation(
             batch=None,
             forward_batch=verify_forward_batch,

@@ -58,6 +58,7 @@ from sglang_tpu.experimental.speculative.chain_draft_worker import (
 )
 from sglang_tpu.experimental.speculative.chain_info import HostPaddedChainDraftInput
 from sglang_tpu.experimental.speculative.draft_forward import forward_draft_rows
+from sglang_tpu.experimental.speculative.lean_forward import lean_forward_allowed
 from sglang_tpu.experimental.speculative.eagle3.eagle3_draft_worker import (
     TpuEagle3DraftWorker,
 )
@@ -117,6 +118,7 @@ class TpuChainSpecWorker(TpuSpecWorker):
             )
         self._chain_draft_worker = draft_worker
         self._draft_runner = draft_worker.model_runner
+        self._lean_draft_forward = lean_forward_allowed(self._draft_runner)
         self._target_vocab_size = target_runner.model_config.vocab_size
         self._target_is_multimodal = process_model_config().is_multimodal
         self._disagg_mode = get_disagg().disaggregation_mode
@@ -273,6 +275,7 @@ class TpuChainSpecWorker(TpuSpecWorker):
                 spec_info=spec_info,
                 capture_hidden_mode=CaptureHiddenMode.FULL,
                 publish_dsa_topk=shares_dsa_topk,
+                lean=self._lean_draft_forward,
             )
         draft_hidden = draft_out.hidden_states
         assert draft_hidden is not None, "Chain draft rows returned no hidden."
