@@ -55,6 +55,18 @@ def _token_window(
     return token_start, jnp.maximum(0, jnp.minimum(bq_sz, hi - token_start))
 
 
+def _fetch_page_row(page_indices_hbm, page_rows, *, seq_idx, batch_idx, bkv_idx):
+    """Copy a sequence's page-table row from HBM into SMEM with its first KV block.
+    The table stays in HBM: prefetched to SMEM it is max_num_seqs x pages_per_seq
+    int32, past the 1 MiB budget at 1M context."""
+    # [max_num_seqs, pages_per_seq]: a dynamic leading index needs no alignment proof.
+    row = jnp.minimum(seq_idx, page_indices_hbm.shape[0] - 1)
+
+    @pl.when(bkv_idx == 0)
+    def _():
+        pltpu.sync_copy(page_indices_hbm.at[row], page_rows.at[batch_idx])
+
+
 @jax.tree_util.register_dataclass
 @dataclasses.dataclass(frozen=True)
 class StreamIndexKVBufferedRef(pltpu.BufferedRef):
@@ -143,7 +155,7 @@ class StreamIndexKVBufferedRef(pltpu.BufferedRef):
         src_ref: tuple[jax.Ref, jax.Ref, Any],
         grid_indices: tuple[int | jax.Array, ...],
     ):
-        cache_kv_hbm, page_indices_ref, meta_ref = src_ref
+        cache_kv_hbm, page_indices_hbm, meta_ref, page_rows = src_ref
         p_id = grid_indices[0] + _step_offset(meta_ref, self.chunk_idx)
         batch_tile_idx = meta_ref.batch_tile_idx[p_id]
         bkv_idx = meta_ref.bkv_idx[p_id]
@@ -161,18 +173,21 @@ class StreamIndexKVBufferedRef(pltpu.BufferedRef):
             cache_kv_hbm.shape[-1],
         )
         max_hbm_pages = reshaped_cache_hbm_ref.shape[0]
-        num_page_indices = page_indices_ref.shape[0]
         effective_seq_idx = batch_tile_idx
 
         for batch_idx in range(self.seq_batch_size):
             kv_p_start = bkv_idx * self.bkv_p
-            page_indices_offset = (
-                effective_seq_idx + batch_idx
-            ) * self.pages_per_seq + kv_p_start
+            _fetch_page_row(
+                page_indices_hbm,
+                page_rows,
+                seq_idx=effective_seq_idx + batch_idx,
+                batch_idx=batch_idx,
+                bkv_idx=bkv_idx,
+            )
             for i in range(self.bkv_p):
-                page_idx = jnp.minimum(page_indices_offset + i, num_page_indices - 1)
+                page_col = jnp.minimum(kv_p_start + i, self.pages_per_seq - 1)
                 safe_page_offset = jnp.minimum(
-                    page_indices_ref[page_idx] * self.page_size_per_kv_packing,
+                    page_rows[batch_idx, page_col] * self.page_size_per_kv_packing,
                     jnp.maximum(0, max_hbm_pages - self.page_size_per_kv_packing),
                 )
                 pltpu.make_async_copy(
@@ -290,7 +305,7 @@ class StreamIndexKVSeqAlongLaneBufferedRef(pltpu.BufferedRef):
         src_ref: tuple[jax.Ref, jax.Ref, Any],
         grid_indices: tuple[int | jax.Array, ...],
     ):
-        cache_kv_hbm, page_indices_ref, meta_ref = src_ref
+        cache_kv_hbm, page_indices_hbm, meta_ref, page_rows = src_ref
         p_id = grid_indices[0] + _step_offset(meta_ref, self.chunk_idx)
         batch_tile_idx = meta_ref.batch_tile_idx[p_id]
         bkv_idx = meta_ref.bkv_idx[p_id]
@@ -303,17 +318,20 @@ class StreamIndexKVSeqAlongLaneBufferedRef(pltpu.BufferedRef):
         vmem_dst: Any = self.window_ref.at[slot]
 
         max_hbm_pages = cache_kv_hbm.shape[0]
-        num_page_indices = page_indices_ref.shape[0]
         effective_seq_idx = batch_tile_idx
 
         for batch_idx in range(self.seq_batch_size):
             kv_p_start = bkv_idx * self.bkv_p
-            page_indices_offset = (
-                effective_seq_idx + batch_idx
-            ) * self.pages_per_seq + kv_p_start
+            _fetch_page_row(
+                page_indices_hbm,
+                page_rows,
+                seq_idx=effective_seq_idx + batch_idx,
+                batch_idx=batch_idx,
+                bkv_idx=bkv_idx,
+            )
             for i in range(self.bkv_p):
-                page_idx = jnp.minimum(page_indices_offset + i, num_page_indices - 1)
-                safe_page = jnp.minimum(page_indices_ref[page_idx], max_hbm_pages - 1)
+                page_col = jnp.minimum(kv_p_start + i, self.pages_per_seq - 1)
+                safe_page = jnp.minimum(page_rows[batch_idx, page_col], max_hbm_pages - 1)
                 dst_lane_start = i * self.page_size
                 pltpu.make_async_copy(
                     cache_kv_hbm.at[safe_page],
