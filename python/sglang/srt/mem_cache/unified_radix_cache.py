@@ -3375,7 +3375,12 @@ class UnifiedRadixCache(BasePrefixCache):
         # now is what remains after the caller drains last step's result.
         previous = self._pending_ready_counts
         if previous is None:
-            prev_result = (0, 0, tuple(0 for _ in storage_queue_sizes), extra_pool_names)
+            prev_result = (
+                0,
+                0,
+                tuple(0 for _ in storage_queue_sizes),
+                extra_pool_names,
+            )
         else:
             works, counts, prev_digest, prev_names = previous
             for work in works:
